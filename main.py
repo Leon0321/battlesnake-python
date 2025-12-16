@@ -11,6 +11,7 @@
 # For more info see docs.battlesnake.com
 import random
 import typing
+from flask import jsonify
 
 
 
@@ -19,10 +20,11 @@ import typing
 # TIP: If you open your Battlesnake URL in a browser you should see this data
 def info() -> typing.Dict:
     print("INFO")
+
     return {
         "apiversion": "1",
         "author": "Orochimaru",  # TODO: Your Battlesnake Username
-        "color": "#1200754F",  # TODO: Choose color
+        "color": "#5D53964F",  # TODO: Choose color
         "head": "cosmic-horror",  # TODO: Choose head
         "tail": "cosmic-horror",  # TODO: Choose tail
     }
