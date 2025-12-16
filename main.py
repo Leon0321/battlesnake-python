@@ -21,9 +21,9 @@ def info() -> typing.Dict:
     print("INFO")
     return {
         "apiversion": "1",
-        "author": "",  # TODO: Your Battlesnake Username
+        "author": "ime",  # TODO: Your Battlesnake Username
         "color": "#C61B1B",  # TODO: Choose color
-        "head": "default",  # TODO: Choose head
+        "head": "cosmic-horror",  # TODO: Choose head
         "tail": "default",  # TODO: Choose tail
     }
 # start is called when your Battlesnake begins a game
