@@ -11,10 +11,7 @@
 # For more info see docs.battlesnake.com
 import random
 import typing
-
 route_list = []
-
-
 def BFS(game_state: typing.Dict, my_head, my_body, oppo_body):
     my_food = game_state['board']['food']
     index_list = [[100 for _ in range(11)] for _ in range(11)]
@@ -31,15 +28,15 @@ def BFS(game_state: typing.Dict, my_head, my_body, oppo_body):
             if(next_index[0] > -1 and next_index[0] < 11 and next_index[1] > -1 and next_index[1] < 11 and index_list[next_index[0]][next_index[1]] > turn+1):
                 next_1ndex = {"x":next_index[0], "y":next_index[1]}
                 next_my_body = [next_1ndex] + my_cur_body
-                next_oppo_body = cur_oppo_body
+                next_oppo_body = list(cur_oppo_body)
                 if(next_1ndex not in my_food):
                     del next_my_body[len(next_my_body) - 1]
-                if(next_1ndex not in oppo_body and next_1ndex not in next_my_body[1:]):
+                if((next_1ndex not in oppo_body) and (next_1ndex not in next_my_body[1:])):
                     index_list[next_index[0]][next_index[1]] = turn+1
-                    del next_oppo_body[len(next_oppo_body) - 1]
+                    if(len(next_oppo_body) > 0):
+                        del next_oppo_body[len(next_oppo_body) - 1]
                     q.append((next_index[0], next_index[1], turn+1, next_my_body, next_oppo_body))
     return index_list
-
 def BFS_fastest(game_state: typing.Dict, my_body, oppo_body, fturn, start, goal):
     my_food = game_state['board']['food']
     index_list = [[100 for _ in range(11)] for _ in range(11)]
@@ -61,7 +58,8 @@ def BFS_fastest(game_state: typing.Dict, my_body, oppo_body, fturn, start, goal)
                     del next_my_body[len(next_my_body) - 1]
                 if(next_1ndex not in next_oppo_body and next_1ndex not in next_my_body[1:]):
                     index_list[next_index[0]][next_index[1]] = turn+1
-                    del next_oppo_body[len(next_oppo_body) - 1]
+                    if(len(next_oppo_body) > 0):
+                        del next_oppo_body[len(next_oppo_body) - 1]
                 next_route = list(cur_route)
                 if(dir == 0):
                     next_route.append("up")
@@ -76,7 +74,6 @@ def BFS_fastest(game_state: typing.Dict, my_body, oppo_body, fturn, start, goal)
                     return route_list
                 q.append((next_index[0], next_index[1], turn+1, next_my_body, next_oppo_body, next_route))
     return []
-
 def get_foodlist(game_state: typing.Dict):
     my_food = game_state['board']['food']
     food_list = []
@@ -84,7 +81,6 @@ def get_foodlist(game_state: typing.Dict):
         food_index = {"x":my_food[food]["x"], "y":my_food[food]["y"], "d":100}
         food_list.append(food_index)
     return food_list
-
 def calculate_distance(game_state: typing.Dict, food_list: typing.Dict):
     my_id = game_state["you"]["id"]
     snakes = game_state["board"]["snakes"]
@@ -97,7 +93,6 @@ def calculate_distance(game_state: typing.Dict, food_list: typing.Dict):
     for food in food_list:
         food["d"] = distance[food["x"]][food["y"]]
     return food_list
-
 def filtering_food(game_state: typing.Dict, food_list):
     # 自分を取得
     my_id = game_state["you"]["id"]
@@ -176,14 +171,10 @@ def filtering_food(game_state: typing.Dict, food_list):
     # 同じ距離ならランダム
     same_distance_foods = [f for f in safe_food_list if f.get('d', float('inf')) == min_distance]
     return random.choice(same_distance_foods)
-
 def determine_food(game_state: typing.Dict):
     foodlist = get_foodlist(game_state)
-
     foodlist = calculate_distance(game_state, foodlist)
-
     return filtering_food(game_state, foodlist)
-
 # info is called when you create your Battlesnake on play.battlesnake.com
 # and controls your Battlesnake's appearance
 # TIP: If you open your Battlesnake URL in a browser you should see this data
@@ -228,7 +219,6 @@ def move(game_state: typing.Dict) -> typing.Dict:
     elif my_neck["x"] > my_head["x"]:  # Neck is above head, don't move up
         is_move_safe["right"] = False
     # TODO: Step 1 - Prevent your Battlesnake from moving out of bounds
-
     if my_head_u["y"] > 10:
         is_move_safe["up"] = False
     if my_head_d["y"] < 0:
@@ -237,10 +227,8 @@ def move(game_state: typing.Dict) -> typing.Dict:
         is_move_safe["left"] = False
     if my_head_r["x"] > 10:
         is_move_safe["right"] = False
-
     # TODO: Step 2 - Prevent your Battlesnake from colliding with itself
     my_body = game_state['you']['body']
-
     if my_head_u in my_body:
         is_move_safe["up"] = False
         if (my_body[my_length-1] == my_head_u) and board_health < 100 and my_turn > 1:
@@ -257,10 +245,8 @@ def move(game_state: typing.Dict) -> typing.Dict:
         is_move_safe["right"] = False
         if (my_body[my_length-1] == my_head_r) and board_health < 100 and my_turn > 1:
             is_move_safe["right"] = True
-
     # TODO: Step 3 - Prevent your Battlesnake from colliding with other Battlesnakes
     # opponents = game_state['board']['snakes']
-
     target_body = [
         cell
         for snake in game_state['board']['snakes']
@@ -269,7 +255,6 @@ def move(game_state: typing.Dict) -> typing.Dict:
     ]
     target_head = target_body[0]
     target_nextbody = [{"x": target_head["x"] , "y": target_head["y"] + 1}, {"x": target_head["x"] , "y": target_head["y"] - 1}, {"x": target_head["x"] - 1, "y": target_head["y"]}, {"x": target_head["x"] + 1, "y": target_head["y"]}]
-
     if my_head_u in target_body or my_head_u in target_nextbody:
         is_move_safe["up"] = False
     if my_head_d in target_body or my_head_d in target_nextbody:
@@ -278,9 +263,7 @@ def move(game_state: typing.Dict) -> typing.Dict:
         is_move_safe["left"] = False
     if my_head_r in target_body or my_head_r in target_nextbody:
         is_move_safe["right"] = False
-
     # Are there any safe moves left?
-
     safe_moves = []
     for move, isSafe in is_move_safe.items():
         if isSafe:
@@ -290,7 +273,6 @@ def move(game_state: typing.Dict) -> typing.Dict:
         return {"move": "down"}
     # Choose a random move from the safe ones
     # next_move = random.choice(safe_moves)
-
     if(len(route_list) > 0):
         next_move = route_list[0]
         route_list.pop(0)
@@ -298,8 +280,6 @@ def move(game_state: typing.Dict) -> typing.Dict:
             return {"move": next_move}
         else:
             route_list = []
-
-
     if len(target_body) + 2 < len(my_body):
         # 敵にぶつかりにいく
         target = target_head
@@ -312,14 +292,12 @@ def move(game_state: typing.Dict) -> typing.Dict:
     obstacle_body = target_body[1:]
     
     route_list = BFS_fastest(game_state, my_body, obstacle_body, 100, [my_head["x"], my_head["y"]], [target["x"], target["y"]])
-
     if(len(route_list) > 0):
         next_move = route_list[0]
         route_list.pop(0)
         return {"move": next_move}
     else:
         next_move = random.choice(safe_moves)
-
     print(f"MOVE {game_state['turn']}: {next_move}")
     return {"move": next_move}
 # Start server when `python main.py` is run
