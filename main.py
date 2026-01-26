@@ -121,11 +121,25 @@ def evaluate_position_safety(pos, game_state, my_snake, enemy_snake):
     length_diff = my_length - enemy_length
     
     if length_diff > 0:
-        # 相手より長い：敵に近い方が良い（攻撃的）
-        score += (10 - enemy_dist) * 2
+        # 相手より長い：中央制圧を優先しつつ、敵との距離も考慮
+        # 敵より中央に近い位置にボーナス
+        my_center_dist = abs(pos['x'] - 5) + abs(pos['y'] - 5)
+        enemy_center_dist = abs(enemy_head['x'] - 5) + abs(enemy_head['y'] - 5)
+        
+        if my_center_dist < enemy_center_dist:
+            # 自分の方が中央に近い = 良い配置
+            score += 50
+        
+        # 敵に近すぎず遠すぎない距離を維持（3-5マス程度）
+        if 3 <= enemy_dist <= 5:
+            score += 30
+        elif enemy_dist < 3:
+            score += 10  # 近すぎるとリスク
+        elif enemy_dist > 7:
+            score -= 20  # 遠すぎると圧力がかからない
     else:
         # 相手より短い：敵から遠い方が良い（防御的）
-        score += enemy_dist * 2
+        score += enemy_dist * 3
     
     # 4. 壁への近さペナルティ
     wall_dist = min(pos['x'], pos['y'], 10 - pos['x'], 10 - pos['y'])
@@ -281,8 +295,10 @@ def detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, ga
     enemy_wall_dist = min(enemy_head['x'], enemy_head['y'], 
                           10 - enemy_head['x'], 10 - enemy_head['y'])
     
-    if enemy_wall_dist > 2:
-        return None  # 端に寄っていない
+    # 敵が端に寄っているか、または端方向に移動中か判定
+    # より早い段階で並走を開始するため、条件を緩和（4マスまで）
+    if enemy_wall_dist > 4:
+        return None  # まだ端に向かっていない
     
     # 敵がどの端に寄っているか判定
     edge_type = None
@@ -373,64 +389,89 @@ def detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, ga
         'enemy_trapped_space': enemy_trapped_space  # 追加
     }
 
+
 def calculate_parallel_chase_position(my_head, enemy_head, enemy_body, my_body, edge_type, parallel_line, game_state):
-    """
-    並走して追い込むための位置を計算
-    画像の例：敵が左端に寄っている場合、自分は敵と同じY座標で分断ライン上を移動
-    """
     if edge_type == 'left':
-        # 左端にいる敵：X=parallel_lineのラインで、敵と同じY座標に位置取り
+        # Enemy at left edge: Position on X=parallel_line with same Y as enemy
         target_x = parallel_line
         target_y = enemy_head['y']
         
-        # 自分が既に分断ラインにいる場合は、敵のY座標に合わせて移動
+        # If already at dividing line, adjust to enemy's Y coordinate
         if my_head['x'] >= parallel_line:
-            # 敵の進行方向を阻む位置を目指す
-            if my_head['y'] < enemy_head['y']:
-                target_y = min(enemy_head['y'], my_head['y'] + 1)
-            elif my_head['y'] > enemy_head['y']:
-                target_y = max(enemy_head['y'], my_head['y'] - 1)
+            # More aggressive: aim for enemy's exact Y coordinate
+            if abs(my_head['y'] - enemy_head['y']) > 0:
+                # Move 1 step closer to enemy's Y
+                if my_head['y'] < enemy_head['y']:
+                    target_y = my_head['y'] + 1
+                else:
+                    target_y = my_head['y'] - 1
+            else:
+                # Already at same Y, maintain position
+                target_y = enemy_head['y']
         
         return {'x': target_x, 'y': target_y}
         
     elif edge_type == 'right':
-        # 右端にいる敵
+        # Enemy at right edge: Position on X=parallel_line with same Y as enemy
         target_x = parallel_line
         target_y = enemy_head['y']
         
+        # If already at dividing line, adjust to enemy's Y coordinate
         if my_head['x'] <= parallel_line:
-            if my_head['y'] < enemy_head['y']:
-                target_y = min(enemy_head['y'], my_head['y'] + 1)
-            elif my_head['y'] > enemy_head['y']:
-                target_y = max(enemy_head['y'], my_head['y'] - 1)
+            # More aggressive: aim for enemy's exact Y coordinate
+            if abs(my_head['y'] - enemy_head['y']) > 0:
+                # Move 1 step closer to enemy's Y
+                if my_head['y'] < enemy_head['y']:
+                    target_y = my_head['y'] + 1
+                else:
+                    target_y = my_head['y'] - 1
+            else:
+                # Already at same Y, maintain position
+                target_y = enemy_head['y']
         
         return {'x': target_x, 'y': target_y}
         
     elif edge_type == 'bottom':
-        # 下端にいる敵
+        # Enemy at bottom edge: Position on Y=parallel_line with same X as enemy
         target_x = enemy_head['x']
         target_y = parallel_line
         
+        # If already at dividing line, adjust to enemy's X coordinate
         if my_head['y'] >= parallel_line:
-            if my_head['x'] < enemy_head['x']:
-                target_x = min(enemy_head['x'], my_head['x'] + 1)
-            elif my_head['x'] > enemy_head['x']:
-                target_x = max(enemy_head['x'], my_head['x'] - 1)
+            # More aggressive: aim for enemy's exact X coordinate
+            if abs(my_head['x'] - enemy_head['x']) > 0:
+                # Move 1 step closer to enemy's X
+                if my_head['x'] < enemy_head['x']:
+                    target_x = my_head['x'] + 1
+                else:
+                    target_x = my_head['x'] - 1
+            else:
+                # Already at same X, maintain position
+                target_x = enemy_head['x']
         
         return {'x': target_x, 'y': target_y}
         
     elif edge_type == 'top':
-        # 上端にいる敵
+        # Enemy at top edge: Position on Y=parallel_line with same X as enemy
         target_x = enemy_head['x']
         target_y = parallel_line
         
+        # If already at dividing line, adjust to enemy's X coordinate
         if my_head['y'] <= parallel_line:
-            if my_head['x'] < enemy_head['x']:
-                target_x = min(enemy_head['x'], my_head['x'] + 1)
-            elif my_head['x'] > enemy_head['x']:
-                target_x = max(enemy_head['x'], my_head['x'] - 1)
+            # More aggressive: aim for enemy's exact X coordinate
+            if abs(my_head['x'] - enemy_head['x']) > 0:
+                # Move 1 step closer to enemy's X
+                if my_head['x'] < enemy_head['x']:
+                    target_x = my_head['x'] + 1
+                else:
+                    target_x = my_head['x'] - 1
+            else:
+                # Already at same X, maintain position
+                target_x = enemy_head['x']
         
         return {'x': target_x, 'y': target_y}
+    
+    return None
     
     return None
 
@@ -491,6 +532,48 @@ def plan_attack_strategy(game_state, my_head, my_body, enemy_head, enemy_body, e
         if parallel_pos:
             print(f"STRATEGY Phase 2: Parallel chase to {parallel_pos}")
             return parallel_pos
+        
+    # ★★★ ここから追加 ★★★
+    # Strategy 3: If longer, push enemy toward edge by controlling center
+    my_length = len(my_body)
+    enemy_length = len(enemy_body)
+    
+    if my_length > enemy_length + 1:  # 2マス以上長い場合
+        # 敵がどの端に近いか判定
+        enemy_distances = {
+            'left': enemy_head['x'],
+            'right': 10 - enemy_head['x'],
+            'bottom': enemy_head['y'],
+            'top': 10 - enemy_head['y']
+        }
+        
+        # 最も近い端を特定
+        nearest_edge = min(enemy_distances.items(), key=lambda x: x[1])
+        edge_name = nearest_edge[0]
+        edge_dist = nearest_edge[1]
+        
+        # 敵が既にある程度端に寄っている場合（5マス以内）
+        if edge_dist <= 5:
+            # その端方向に敵を押し込むための位置を計算
+            if edge_name == 'left':
+                # 左端：自分は敵の右側（X方向で大きい位置）で中央寄りに
+                push_target = {'x': min(enemy_head['x'] + 3, 7), 'y': enemy_head['y']}
+            elif edge_name == 'right':
+                # 右端：自分は敵の左側で中央寄りに
+                push_target = {'x': max(enemy_head['x'] - 3, 3), 'y': enemy_head['y']}
+            elif edge_name == 'bottom':
+                # 下端：自分は敵の上側で中央寄りに
+                push_target = {'x': enemy_head['x'], 'y': min(enemy_head['y'] + 3, 7)}
+            elif edge_name == 'top':
+                # 上端：自分は敵の下側で中央寄りに
+                push_target = {'x': enemy_head['x'], 'y': max(enemy_head['y'] - 3, 3)}
+            
+            # 安全性チェック
+            push_space = floodfill(push_target, game_state, my_body, enemy_body)
+            if push_space >= my_length:
+                print(f"STRATEGY: Pushing enemy to {edge_name} edge, target {push_target}")
+                return push_target
+    # ★★★ ここまで追加 ★★★
     
 
 
@@ -886,6 +969,19 @@ def move(game_state: typing.Dict) -> typing.Dict:
         # 経路がない場合は最も安全な方向を選ぶ
         if move_scores:
             next_move = max(move_scores, key=move_scores.get)
+            
+            # ★ 最後の手段チェック ★
+            best_score = move_scores[next_move]
+            if best_score < -400:  # Narrow pathペナルティは-500
+                print(f"WARNING: Best move {next_move} has low score {best_score}")
+                # 体長の80%以上のスペースがある選択肢を探す
+                for move in safe_moves:
+                    pos = move_positions[move]
+                    reachable = floodfill(pos, game_state, my_body, target_body)
+                    if reachable >= my_length * 0.8:
+                        print(f"FALLBACK: Choosing {move} with reachable {reachable}")
+                        next_move = move
+                        break
         elif safe_moves:
             next_move = random.choice(safe_moves)
         else:
