@@ -418,7 +418,7 @@ def can_effectively_trap_enemy(my_head, my_body, enemy_head, enemy_body, enemy_s
     return False, 0
 
 
-def is_safe_food(food_pos, my_head, my_body, enemy_head, enemy_body, game_state):
+def is_safe_food(food_pos, my_head, my_body, enemy_head, enemy_body, game_state, *, relaxed: bool = False):
     """
     餌が安全に取れるかどうかを判定
     端っこすぎる餌は避ける
@@ -427,26 +427,115 @@ def is_safe_food(food_pos, my_head, my_body, enemy_head, enemy_body, game_state)
     food_wall_dist = min(food_pos['x'], food_pos['y'],
                          10 - food_pos['x'], 10 - food_pos['y'])
     
-    # 端から2マス以内の餌は危険（追い詰められる可能性）
-    if food_wall_dist <= 2:
-        return False
+    # 通常は端から2マス以内を避けるが、
+    # 空腹/長さ負け等で「どうしても食べたい」状況では 1 マスまで許容
+    if not relaxed:
+        if food_wall_dist <= 2:
+            return False
+    else:
+        if food_wall_dist <= 1:
+            return False
     
     # 餌の位置から到達可能な領域をチェック
     food_reachable = floodfill(food_pos, game_state, my_body, enemy_body)
     my_length = len(my_body)
     
     # 餌の位置に到達可能領域が体長より少ない場合は危険
-    if food_reachable < my_length:
+    if not relaxed and food_reachable < my_length:
+        return False
+    # 緩和時は「最低限」(体長の0.8倍) あれば許容
+    if relaxed and food_reachable < max(5, int(my_length * 0.8)):
         return False
     
     # 敵が餌に近すぎる場合（2マス以内）
     food_enemy_dist = abs(food_pos['x'] - enemy_head['x']) + abs(food_pos['y'] - enemy_head['y'])
-    if food_enemy_dist <= 2:
+    if food_enemy_dist <= (2 if not relaxed else 1):
         # 自分が敵より長い場合のみ安全
         if len(my_body) <= len(enemy_body):
             return False
     
     return True
+
+
+def choose_food_target(game_state: typing.Dict, my_head, my_body, enemy_head, enemy_body, *, relaxed: bool) -> typing.Optional[typing.Dict]:
+    """
+    現在の盤面から「取るべき餌」を選ぶ。
+    determine_food() は保守的すぎて None になりがちなので、
+    距離最短 + 安全性(通常/緩和)で決める。
+    """
+    foods = game_state['board']['food']
+    if not foods:
+        return None
+
+    dist_map = BFS(game_state, my_head, my_body, enemy_body)
+
+    candidates: list[typing.Dict] = []
+    for f in foods:
+        d = dist_map[f['x']][f['y']]
+        if d >= 100:
+            continue
+        if not is_safe_food(f, my_head, my_body, enemy_head, enemy_body, game_state, relaxed=relaxed):
+            continue
+        candidates.append({'x': f['x'], 'y': f['y'], 'd': d})
+
+    if not candidates:
+        return None
+
+    min_d = min(c['d'] for c in candidates)
+    best = [c for c in candidates if c['d'] == min_d]
+    pick = random.choice(best)
+    return {'x': pick['x'], 'y': pick['y']}
+
+
+def threatened_squares_by_head(my_next_head: typing.Dict, *, my_length: int, enemy_length: int) -> list[typing.Dict]:
+    """
+    DUELの頭同士ルールを利用した「敵が入りづらいマス」。
+    自分が長い(>敵)とき、敵が自分の頭の隣に入ると次手で負けやすいので
+    その周囲を“圧力”として扱う（領域分断の評価用）。
+    """
+    if my_length <= enemy_length:
+        return []
+    xs = [
+        {'x': my_next_head['x'], 'y': my_next_head['y'] + 1},
+        {'x': my_next_head['x'], 'y': my_next_head['y'] - 1},
+        {'x': my_next_head['x'] - 1, 'y': my_next_head['y']},
+        {'x': my_next_head['x'] + 1, 'y': my_next_head['y']},
+    ]
+    out: list[typing.Dict] = []
+    for p in xs:
+        if 0 <= p['x'] < 11 and 0 <= p['y'] < 11:
+            out.append(p)
+    return out
+
+
+def territory_delta_score(
+    game_state: typing.Dict,
+    *,
+    my_next_head: typing.Dict,
+    my_body: list[typing.Dict],
+    enemy_head: typing.Dict,
+    enemy_body: list[typing.Dict],
+    my_length: int,
+    enemy_length: int,
+) -> int:
+    """
+    “黄色っぽい”動きの核:
+    - 自分が長い時、頭の圧力で敵の領域を削る
+    - 自分は中央退路を残しつつ、敵の可動域を分断
+    スコアは (自分の領域 - 敵の領域) をベースにする。
+    """
+    # まず素の領域
+    my_area = floodfill(my_next_head, game_state, my_body, enemy_body)
+
+    threat = threatened_squares_by_head(my_next_head, my_length=my_length, enemy_length=enemy_length)
+    # 敵領域は「自分の圧力(threat)」も障害として見て、縮むほど良い
+    enemy_area = floodfill(enemy_head, game_state, enemy_body + threat, my_body)
+
+    # 中央に近いほど、分断後の“退路”が残るので微ボーナス
+    center_dist = abs(my_next_head['x'] - 5) + abs(my_next_head['y'] - 5)
+    center_bonus = (10 - center_dist) * 2
+
+    return (my_area - enemy_area) * 6 + center_bonus
 
 
 def predict_enemy_next_move(enemy_head, enemy_body, my_body, game_state):
@@ -485,23 +574,6 @@ def predict_enemy_next_move(enemy_head, enemy_body, my_body, game_state):
     # 最も到達可能領域が大きい方向を選ぶ（敵は安全な方向に動く）
     best_move = max(possible_moves, key=lambda m: m['reachable'])
     return best_move['pos']
-    """
-    敵の脱出経路を予測し、塞ぐべき位置を返す
-    """
-    escape_routes = []
-    
-    # 敵の頭から見て、分断ラインを越える方向の隣接マスをチェック
-    if edge_type == 'left':
-        # 敵は左側、自分は右側（X >= parallel_line）
-        # 敵が右に動こうとする経路をチェック
-        for dy in [-1, 0, 1]:
-            escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
-            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
-                if escape_pos not in enemy_body and escape_pos not in my_body:
-                    # この位置から中央への到達可能性をチェック
-                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
-                    if reachable > len(enemy_body):
-                        escape_routes.append(escape_pos)
     
     elif edge_type == 'right':
         # 敵は右側、自分は左側（X <= parallel_line）
@@ -1172,6 +1244,7 @@ def move(game_state: typing.Dict) -> typing.Dict:
     move_positions = {"up": my_head_u,"down": my_head_d,"left": my_head_l,"right": my_head_r}
 
     move_scores = {}
+    enemy_length = len(target_body)
     for move in safe_moves:
         pos = move_positions[move]
         safety_score = evaluate_position_safety(pos, game_state, my_snake, enemy_snake)
@@ -1199,6 +1272,19 @@ def move(game_state: typing.Dict) -> typing.Dict:
                 safety_score += 30
             else:
                 safety_score -= 20  # 不用意に近づくのは避ける
+
+        # ★★★ 追加：長い時は「領域分断」を最重要評価 ★★★
+        # 黄色の動きの核：敵の可動域を削りつつ中央を維持
+        if my_length >= enemy_length + 1:
+            safety_score += territory_delta_score(
+                game_state,
+                my_next_head=pos,
+                my_body=my_body,
+                enemy_head=target_head,
+                enemy_body=target_body,
+                my_length=my_length,
+                enemy_length=enemy_length,
+            )
     
         move_scores[move] = safety_score
 
@@ -1254,6 +1340,10 @@ def move(game_state: typing.Dict) -> typing.Dict:
 
     #目的ますを決める
     # ★★★ 改善：状況に応じて適切に判断 ★★★
+    my_health = game_state["you"]["health"]
+    enemy_length = len(target_body)
+    length_diff = my_length - enemy_length
+    hungry = my_health <= 35
     
     # まず自分が追い詰められているかチェック
     is_trapped, trapped_severity = is_being_trapped(my_head, my_body, target_head, target_body, game_state)
@@ -1262,9 +1352,12 @@ def move(game_state: typing.Dict) -> typing.Dict:
         # 自分が追い詰められている場合は安全性を最優先
         print(f"DEFENSIVE MODE: Being trapped (severity: {trapped_severity})")
         
-        # 安全な餌を探す
-        food_target = determine_food(game_state)
-        if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
+        # 追い詰められ時/空腹/長さ負けでは「緩和してでも」餌を取りに行く
+        food_target = choose_food_target(
+            game_state, my_head, my_body, target_head, target_body,
+            relaxed=(hungry or length_diff <= -2 or trapped_severity >= 2)
+        )
+        if food_target is not None:
             target = food_target
             print(f"DEFENSIVE: Going for safe food at {target}")
         else:
@@ -1283,16 +1376,47 @@ def move(game_state: typing.Dict) -> typing.Dict:
         # 敵を的確に追い詰められるかチェック
         can_trap, trap_quality = can_effectively_trap_enemy(my_head, my_body, target_head, target_body, enemy_snake, game_state)
         
-        if can_trap and trap_quality >= 2:
+        # ★★★ 追加：長さ有利 + 中央付近なら「餌より領域分断」を優先して1手を選ぶ ★★★
+        # ここが黄色の動き（中央キープ・接近拒否・分断）の要。
+        if (not hungry) and (length_diff >= 2) and (abs(my_head['x'] - 5) + abs(my_head['y'] - 5) <= 4):
+            best_move = max(move_scores, key=move_scores.get)
+            print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
+            print(f"MOVE {game_state['turn']}: CONTROL MODE {best_move} (len_diff={length_diff})")
+            return {"move": best_move}
+
+        # 空腹 or 長さ負けが大きい場合は、攻撃よりも餌を優先（長さ有利を作る）
+        if hungry or length_diff <= -2:
+            food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=True)
+            if food_target is not None:
+                target = food_target
+                print(f"FOOD MODE (urgent): Going for food at {target} (health={my_health}, diff={length_diff})")
+            else:
+                # 餌が取れないなら中央維持/安全手
+                center = {"x": 5, "y": 5}
+                center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
+                if center_dist > 2:
+                    target = center
+                else:
+                    if move_scores:
+                        best_move = max(move_scores, key=move_scores.get)
+                        print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
+                        print(f"MOVE {game_state['turn']}: Best safe move (urgent food, none) {best_move}")
+                        return {"move": best_move}
+                    print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
+                    print(f"MOVE {game_state['turn']}: Random (urgent food, none)")
+                    return {"move": random.choice(safe_moves)}
+        elif can_trap and trap_quality >= 2:
             # 的確に追い詰められる場合は攻撃戦略を優先
             attack_target = plan_attack_strategy(game_state, my_head, my_body, target_head, target_body, enemy_snake)
             if attack_target is not None:
                 target = attack_target
                 print(f"ATTACK MODE: Targeting {target} (trap quality: {trap_quality})")
             else:
-                # 攻撃戦略が実行できない場合は安全な餌を探す
-                food_target = determine_food(game_state)
-                if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
+                # 攻撃戦略が実行できない場合は餌（通常→緩和の順）へ
+                food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=False)
+                if food_target is None:
+                    food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=True)
+                if food_target is not None:
                     target = food_target
                     print(f"ATTACK MODE: Going for safe food at {target}")
                 else:
@@ -1312,9 +1436,11 @@ def move(game_state: typing.Dict) -> typing.Dict:
                             print(f"MOVE {game_state['turn']}: Random (no attack opportunity)")
                             return {"move": random.choice(safe_moves)}
         else:
-            # 追い詰められない場合は安全な餌を優先
-            food_target = determine_food(game_state)
-            if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
+            # 追い詰められない場合は餌を優先（通常→緩和）
+            food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=False)
+            if food_target is None:
+                food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=True)
+            if food_target is not None:
                 target = food_target
                 print(f"FOOD MODE: Going for safe food at {target}")
             else:
