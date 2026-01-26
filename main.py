@@ -67,9 +67,7 @@ def BFS_fastest(game_state, my_body, oppo_body, fturn, start, goal):
 
 
 def floodfill(start_pos, game_state, my_body, oppo_body):
-    """
-    指定位置から到達可能なマス数をカウント（安全性評価用）
-    """
+    #指定位置から到達可能なマス数をカウント（安全性評価用）
     visited = set()
     queue = [(start_pos['x'], start_pos['y'])]
     visited.add((start_pos['x'], start_pos['y']))
@@ -98,9 +96,7 @@ def floodfill(start_pos, game_state, my_body, oppo_body):
 
 
 def evaluate_position_safety(pos, game_state, my_snake, enemy_snake):
-    """
-    位置の安全性を数値で評価（高いほど安全）
-    """
+    #置の安全性を数値で評価（高いほど安全）
     score = 0
     my_body = my_snake['body']
     enemy_body = enemy_snake['body']
@@ -108,75 +104,58 @@ def evaluate_position_safety(pos, game_state, my_snake, enemy_snake):
     my_length = my_snake['length']
     enemy_length = enemy_snake['length']
     
-    # 1. Floodfill：到達可能領域（最重要）
+    #Floodfill
     reachable = floodfill(pos, game_state, my_body, enemy_body)
     score += reachable * 10
     
-    # 2. 中央への近さ（11x11なので中心は5,5）
+    #中央への近さ
     center_dist = abs(pos['x'] - 5) + abs(pos['y'] - 5)
     score += (10 - center_dist) * 3
     
-    # 3. 敵の頭との距離（長さによって評価が変わる）
+    #敵の頭と長さとの比較
     enemy_dist = abs(pos['x'] - enemy_head['x']) + abs(pos['y'] - enemy_head['y'])
     length_diff = my_length - enemy_length
     
     if length_diff > 0:
-        # 相手より長い：中央制圧を優先しつつ、敵との距離も考慮
-        # 敵より中央に近い位置にボーナス
         my_center_dist = abs(pos['x'] - 5) + abs(pos['y'] - 5)
         enemy_center_dist = abs(enemy_head['x'] - 5) + abs(enemy_head['y'] - 5)
         
         if my_center_dist < enemy_center_dist:
-            # 自分の方が中央に近い = 良い配置
             score += 50
         
-        # 敵に近すぎず遠すぎない距離を維持（2-6マス程度、より積極的に）
         if 2 <= enemy_dist <= 6:
-            score += 40  # より積極的に近づく
+            score += 40  
         elif enemy_dist < 2:
-            score += 20  # 近すぎても攻撃的
+            score += 20  
         elif enemy_dist > 7:
-            score -= 30  # 遠すぎると圧力がかからない
+            score -= 30 
     else:
-        # 相手より短い：でも受け身にならず、適度な距離を保つ
-        # 完全に逃げるのではなく、2-4マス程度の距離を維持
         if 2 <= enemy_dist <= 4:
-            score += 20  # 適度な距離で圧力をかける
+            score += 20  
         elif enemy_dist < 2:
-            score -= 10  # 近すぎるのは危険
+            score -= 10 
         else:
-            score += enemy_dist * 2  # 遠すぎるのは避ける
+            score += enemy_dist * 2 
     
-    # 4. 壁への近さペナルティ
+    #壁近
     wall_dist = min(pos['x'], pos['y'], 10 - pos['x'], 10 - pos['y'])
     score += wall_dist * 2
     
     return score
 
 def is_narrow_path(pos, game_state, my_body, enemy_body, enemy_head):
-    """
-    幅1の危険な経路かどうかを判定
-    敵が動くことで塞がれる可能性も考慮
-    """
+    #幅1の危険な経路かどうかを判定
     my_length = len(my_body)
     
-    # その位置からの到達可能領域が少ない場合
     reachable = floodfill(pos, game_state, my_body, enemy_body)
-    
-    # 自分の体長より到達可能領域が少ない場合は危険
     if reachable < my_length:
         return True
-    
-    # 到達可能領域が体長の2倍以下なら危険
     if reachable < my_length * 2:
         return True
-
-    # 到達可能領域が15マス以下も危険
     if reachable < 15:
         return True
     
-    # ★★★ 追加：敵が1手動いた後の空間もチェック ★★★
-    # 敵の頭の隣接マス（敵が次に移動できる場所）
+    #敵が動いてふさがれるのを考慮
     enemy_next_positions = [
         {'x': enemy_head['x'], 'y': enemy_head['y'] + 1},
         {'x': enemy_head['x'], 'y': enemy_head['y'] - 1},
@@ -184,35 +163,23 @@ def is_narrow_path(pos, game_state, my_body, enemy_body, enemy_head):
         {'x': enemy_head['x'] + 1, 'y': enemy_head['y']}
     ]
     
-    # 敵が各方向に動いた場合をシミュレート
     min_reachable_after_enemy_move = reachable
     for enemy_next_pos in enemy_next_positions:
-        # 範囲外チェック
-        if not (0 <= enemy_next_pos['x'] < 11 and 0 <= enemy_next_pos['y'] < 11):
-            continue
+        if not (0 <= enemy_next_pos['x'] < 11 and 0 <= enemy_next_pos['y'] < 11):continue
+
+        if enemy_next_pos in enemy_body or enemy_next_pos in my_body:continue
         
-        # 敵の体や自分の体と重なる移動は除外
-        if enemy_next_pos in enemy_body or enemy_next_pos in my_body:
-            continue
-        
-        # 敵が1マス動いた後の体を作成（尾が1マス短くなる想定）
         simulated_enemy_body = [enemy_next_pos] + enemy_body[:-1]
         
-        # その状態でposから到達可能な領域を計算
         reachable_after = floodfill(pos, game_state, my_body, simulated_enemy_body)
         min_reachable_after_enemy_move = min(min_reachable_after_enemy_move, reachable_after)
-    
-    # 敵が動いた後の最悪ケースで体長以下なら危険
+
     if min_reachable_after_enemy_move < my_length:
-        print(f"Narrow path detected: reachable drops to {min_reachable_after_enemy_move} after enemy moves")
         return True
-    
-    # 敵が動いた後の最悪ケースで体長の1.5倍以下なら危険
+
     if min_reachable_after_enemy_move < my_length * 1.5:
-        print(f"Narrow path warning: reachable drops to {min_reachable_after_enemy_move} after enemy moves")
         return True
     
-    # 敵の頭が近く、塞がれる可能性がある場合
     enemy_dist = abs(pos['x'] - enemy_head['x']) + abs(pos['y'] - enemy_head['y'])
     if enemy_dist <= 2 and reachable < 20:
         return True
@@ -220,30 +187,18 @@ def is_narrow_path(pos, game_state, my_body, enemy_body, enemy_head):
     return False
 
 def find_enemy_narrow_corridor(enemy_head, enemy_body, my_body, game_state):
-    """
-    敵が幅1の経路にいるかを判定し、いる場合はその経路情報を返す
-    """
-    # 敵の位置から到達可能な領域を調べる
+    #敵が幅1の経路にいるか（さっきの攻撃側パターンの検知）
     reachable = floodfill(enemy_head, game_state, enemy_body, my_body)
     
-    # 到達可能領域が少ない = 幅1経路にいる可能性
     if reachable < 8:
-        # 経路の出口を探す
         exits = find_corridor_exits(enemy_head, enemy_body, my_body, game_state)
         if len(exits) > 0:
-            return {
-                'in_corridor': True,
-                'exits': exits,
-                'reachable_area': reachable
-            }
-    
+            return {'in_corridor': True,'exits': exits,'reachable_area': reachable}
     return None
 
 
 def find_corridor_exits(start_pos, enemy_body, my_body, game_state):
-    """
-    幅1経路の出口（広い空間への入り口）を見つける
-    """
+    #幅1経路の出口（広い空間への入り口）を見つける
     exits = []
     visited = set()
     queue = [(start_pos['x'], start_pos['y'])]
@@ -253,15 +208,12 @@ def find_corridor_exits(start_pos, enemy_body, my_body, game_state):
         x, y = queue.pop(0)
         pos = {'x': x, 'y': y}
         
-        # この位置からの到達可能領域を確認
         local_reachable = floodfill(pos, game_state, enemy_body, my_body)
         
-        # 急に広くなる場所 = 出口
         if local_reachable > 15:
             exits.append(pos)
-            continue  # この先は探索しない
+            continue 
         
-        # 隣接マスを探索
         for dx, dy in [[0,1], [0,-1], [1,0], [-1,0]]:
             nx, ny = x + dx, y + dy
             if (nx, ny) in visited:
@@ -280,29 +232,20 @@ def find_corridor_exits(start_pos, enemy_body, my_body, game_state):
 
 
 def calculate_blocking_position(my_head, exits):
-    """
-    出口を塞ぐための最適な位置を計算
-    """
+    #敵の幅１出口を塞ぐための最適な位置を発見
     if not exits:
         return None
     
-    # 最も近い出口を選ぶ
     closest_exit = min(exits, key=lambda e: abs(my_head['x'] - e['x']) + abs(my_head['y'] - e['y']))
     
-    # 出口の隣接マス（実際に塞ぐ位置）を返す
     return closest_exit
 
 
 def predict_enemy_escape_routes(enemy_head, enemy_body, my_body, edge_type, parallel_line, game_state):
-    """
-    敵の脱出経路を予測し、塞ぐべき位置を返す
-    """
+    # 敵の脱出経路を予測し、塞ぐべき位置を返す（先ほどまでに加えてさらに攻撃性能を高めるために）
     escape_routes = []
     
-    # 敵の頭から見て、分断ラインを越える方向の隣接マスをチェック
     if edge_type == 'left':
-        # 敵は左側（X < parallel_line）、自分は右側（X >= parallel_line）
-        # 敵が右に動こうとする経路をチェック
         for dy in [-1, 0, 1]:
             escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
             if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
@@ -313,7 +256,6 @@ def predict_enemy_escape_routes(enemy_head, enemy_body, my_body, edge_type, para
                         escape_routes.append(escape_pos)
     
     elif edge_type == 'right':
-        # 敵は右側、自分は左側（X <= parallel_line）
         for dy in [-1, 0, 1]:
             escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
             if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
@@ -323,7 +265,6 @@ def predict_enemy_escape_routes(enemy_head, enemy_body, my_body, edge_type, para
                         escape_routes.append(escape_pos)
     
     elif edge_type == 'bottom':
-        # 敵は下側、自分は上側（Y >= parallel_line）
         for dx in [-1, 0, 1]:
             escape_pos = {'x': enemy_head['x'] + dx, 'y': parallel_line}
             if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
@@ -333,7 +274,6 @@ def predict_enemy_escape_routes(enemy_head, enemy_body, my_body, edge_type, para
                         escape_routes.append(escape_pos)
     
     elif edge_type == 'top':
-        # 敵は上側、自分は下側（Y <= parallel_line）
         for dx in [-1, 0, 1]:
             escape_pos = {'x': enemy_head['x'] + dx, 'y': parallel_line}
             if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
@@ -346,27 +286,21 @@ def predict_enemy_escape_routes(enemy_head, enemy_body, my_body, edge_type, para
 
 
 def is_being_trapped(my_head, my_body, enemy_head, enemy_body, game_state):
-    """
-    自分が追い詰められているかどうかを判定
-    返り値: (is_trapped: bool, trapped_severity: int)
-    """
-    # 自分の位置から到達可能な領域をチェック
+    #自分が追い詰められているかどうか（安全性評価の足しに）
+    #移動可能領域や敵の位置を考慮して行う
+
     my_reachable = floodfill(my_head, game_state, my_body, enemy_body)
     my_length = len(my_body)
-    
-    # 到達可能領域が体長より少ない場合は危険
+
     if my_reachable < my_length:
-        return True, 3  # 非常に危険
-    
-    # 到達可能領域が体長の1.5倍以下なら警告
+        return True, 3 
+
     if my_reachable < my_length * 1.5:
-        return True, 2  # 危険
-    
-    # 到達可能領域が体長の2倍以下なら注意
+        return True, 2 
+
     if my_reachable < my_length * 2:
-        return True, 1  # 注意
-    
-    # 敵が近く、自分の空間が限られている場合
+        return True, 1  
+
     enemy_dist = abs(my_head['x'] - enemy_head['x']) + abs(my_head['y'] - enemy_head['y'])
     if enemy_dist <= 2 and my_reachable < my_length * 2.5:
         return True, 1
@@ -375,54 +309,42 @@ def is_being_trapped(my_head, my_body, enemy_head, enemy_body, game_state):
 
 
 def can_effectively_trap_enemy(my_head, my_body, enemy_head, enemy_body, enemy_snake, game_state):
-    """
-    敵を的確に追い詰められるかどうかを判定
-    返り値: (can_trap: bool, trap_quality: int)
-    """
+    # 敵を的確に追い詰められるかどうかを判定（意味なく近づくだけじゃ意味ないし逆に不利になる）
+
     my_length = len(my_body)
     enemy_length = len(enemy_body)
-    
-    # 長さが足りない場合は追い詰められない
+
     if my_length < enemy_length:
         return False, 0
     
-    # 敵の位置から到達可能な領域をチェック
     enemy_reachable = floodfill(enemy_head, game_state, enemy_body, my_body)
     
-    # 敵が既に追い詰められている（幅1経路にいる）
     if enemy_reachable < enemy_length:
-        return True, 3  # 非常に良いチャンス
+        return True, 3 
     
-    # 敵が端に近い場合
     enemy_wall_dist = min(enemy_head['x'], enemy_head['y'],
                           10 - enemy_head['x'], 10 - enemy_head['y'])
     
-    # 自分が中央寄りで、敵が端に寄っている場合
     my_center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
     
     if enemy_wall_dist <= 3 and my_center_dist <= 4:
-        # 並走で追い込める可能性がある
         herding_opportunity = detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, game_state)
         if herding_opportunity:
             my_safe_space = herding_opportunity.get('my_safe_space', 0)
             enemy_trapped_space = herding_opportunity.get('enemy_trapped_space', 999)
             
-            # 自分の空間が十分で、敵の空間が限られている場合
             if my_safe_space >= my_length + 5 and enemy_trapped_space < enemy_length * 2:
-                return True, 2  # 良いチャンス
+                return True, 2
     
-    # 敵が端に近づいている場合（5マス以内）
     if enemy_wall_dist <= 5 and my_length >= enemy_length:
-        return True, 1  # チャンスあり
+        return True, 1  
     
     return False, 0
 
 
 def is_safe_food(food_pos, my_head, my_body, enemy_head, enemy_body, game_state, *, relaxed: bool = False):
-    """
-    餌が安全に取れるかどうかを判定
-    端っこすぎる餌は避ける
-    """
+    #餌の安全性をさらに評価（餌をとったときに生まれる隙を軽減するため
+
     # 餌の位置が端っこすぎるかチェック
     food_wall_dist = min(food_pos['x'], food_pos['y'],
                          10 - food_pos['x'], 10 - food_pos['y'])
@@ -539,10 +461,9 @@ def territory_delta_score(
 
 
 def predict_enemy_next_move(enemy_head, enemy_body, my_body, game_state):
-    """
-    敵の次の動きを予測（最も可能性の高い方向を返す）
-    """
-    # 敵が移動できる方向をチェック
+    #敵の次の動きを予測（相手の動き方知らんが、汎用的に最も可能性の高い方向を返す）
+
+
     possible_moves = []
     directions = [
         {'x': enemy_head['x'], 'y': enemy_head['y'] + 1, 'dir': 'up'},
@@ -553,10 +474,8 @@ def predict_enemy_next_move(enemy_head, enemy_body, my_body, game_state):
     
     for move in directions:
         pos = {'x': move['x'], 'y': move['y']}
-        # 範囲チェック
         if not (0 <= pos['x'] < 11 and 0 <= pos['y'] < 11):
             continue
-        # 自分の体と敵の体との衝突チェック
         if pos in enemy_body[1:] or pos in my_body:
             continue
         
@@ -574,6 +493,23 @@ def predict_enemy_next_move(enemy_head, enemy_body, my_body, game_state):
     # 最も到達可能領域が大きい方向を選ぶ（敵は安全な方向に動く）
     best_move = max(possible_moves, key=lambda m: m['reachable'])
     return best_move['pos']
+    """
+    敵の脱出経路を予測し、塞ぐべき位置を返す
+    """
+    escape_routes = []
+    
+    # 敵の頭から見て、分断ラインを越える方向の隣接マスをチェック
+    if edge_type == 'left':
+        # 敵は左側、自分は右側（X >= parallel_line）
+        # 敵が右に動こうとする経路をチェック
+        for dy in [-1, 0, 1]:
+            escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    # この位置から中央への到達可能性をチェック
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
     
     elif edge_type == 'right':
         # 敵は右側、自分は左側（X <= parallel_line）
@@ -821,14 +757,7 @@ def calculate_parallel_chase_position(my_head, enemy_head, enemy_body, my_body, 
 
 
 def plan_attack_strategy(game_state, my_head, my_body, enemy_head, enemy_body, enemy_snake):
-    """
-    攻撃戦略を計画し、目標位置を返す
-    優先順位：
-    1. 敵が幅1経路にいる → 出口を塞ぐ
-    2. 敵が端に寄っている → 並走して追い込む
-    3. 敵を端に追い込む（的確に追い詰められる場合のみ）
-    4. その他 → 中央を制圧しつつ敵に圧力をかける（ただし不用意に近づかない）
-    """
+    # 攻撃戦略決定し、目標マス返す
     my_length = len(my_body)
     enemy_length = len(enemy_body)
     
@@ -1244,7 +1173,6 @@ def move(game_state: typing.Dict) -> typing.Dict:
     move_positions = {"up": my_head_u,"down": my_head_d,"left": my_head_l,"right": my_head_r}
 
     move_scores = {}
-    enemy_length = len(target_body)
     for move in safe_moves:
         pos = move_positions[move]
         safety_score = evaluate_position_safety(pos, game_state, my_snake, enemy_snake)
@@ -1272,19 +1200,6 @@ def move(game_state: typing.Dict) -> typing.Dict:
                 safety_score += 30
             else:
                 safety_score -= 20  # 不用意に近づくのは避ける
-
-        # ★★★ 追加：長い時は「領域分断」を最重要評価 ★★★
-        # 黄色の動きの核：敵の可動域を削りつつ中央を維持
-        if my_length >= enemy_length + 1:
-            safety_score += territory_delta_score(
-                game_state,
-                my_next_head=pos,
-                my_body=my_body,
-                enemy_head=target_head,
-                enemy_body=target_body,
-                my_length=my_length,
-                enemy_length=enemy_length,
-            )
     
         move_scores[move] = safety_score
 
@@ -1340,10 +1255,6 @@ def move(game_state: typing.Dict) -> typing.Dict:
 
     #目的ますを決める
     # ★★★ 改善：状況に応じて適切に判断 ★★★
-    my_health = game_state["you"]["health"]
-    enemy_length = len(target_body)
-    length_diff = my_length - enemy_length
-    hungry = my_health <= 35
     
     # まず自分が追い詰められているかチェック
     is_trapped, trapped_severity = is_being_trapped(my_head, my_body, target_head, target_body, game_state)
@@ -1352,12 +1263,9 @@ def move(game_state: typing.Dict) -> typing.Dict:
         # 自分が追い詰められている場合は安全性を最優先
         print(f"DEFENSIVE MODE: Being trapped (severity: {trapped_severity})")
         
-        # 追い詰められ時/空腹/長さ負けでは「緩和してでも」餌を取りに行く
-        food_target = choose_food_target(
-            game_state, my_head, my_body, target_head, target_body,
-            relaxed=(hungry or length_diff <= -2 or trapped_severity >= 2)
-        )
-        if food_target is not None:
+        # 安全な餌を探す
+        food_target = determine_food(game_state)
+        if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
             target = food_target
             print(f"DEFENSIVE: Going for safe food at {target}")
         else:
@@ -1376,47 +1284,16 @@ def move(game_state: typing.Dict) -> typing.Dict:
         # 敵を的確に追い詰められるかチェック
         can_trap, trap_quality = can_effectively_trap_enemy(my_head, my_body, target_head, target_body, enemy_snake, game_state)
         
-        # ★★★ 追加：長さ有利 + 中央付近なら「餌より領域分断」を優先して1手を選ぶ ★★★
-        # ここが黄色の動き（中央キープ・接近拒否・分断）の要。
-        if (not hungry) and (length_diff >= 2) and (abs(my_head['x'] - 5) + abs(my_head['y'] - 5) <= 4):
-            best_move = max(move_scores, key=move_scores.get)
-            print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
-            print(f"MOVE {game_state['turn']}: CONTROL MODE {best_move} (len_diff={length_diff})")
-            return {"move": best_move}
-
-        # 空腹 or 長さ負けが大きい場合は、攻撃よりも餌を優先（長さ有利を作る）
-        if hungry or length_diff <= -2:
-            food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=True)
-            if food_target is not None:
-                target = food_target
-                print(f"FOOD MODE (urgent): Going for food at {target} (health={my_health}, diff={length_diff})")
-            else:
-                # 餌が取れないなら中央維持/安全手
-                center = {"x": 5, "y": 5}
-                center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
-                if center_dist > 2:
-                    target = center
-                else:
-                    if move_scores:
-                        best_move = max(move_scores, key=move_scores.get)
-                        print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
-                        print(f"MOVE {game_state['turn']}: Best safe move (urgent food, none) {best_move}")
-                        return {"move": best_move}
-                    print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
-                    print(f"MOVE {game_state['turn']}: Random (urgent food, none)")
-                    return {"move": random.choice(safe_moves)}
-        elif can_trap and trap_quality >= 2:
+        if can_trap and trap_quality >= 2:
             # 的確に追い詰められる場合は攻撃戦略を優先
             attack_target = plan_attack_strategy(game_state, my_head, my_body, target_head, target_body, enemy_snake)
             if attack_target is not None:
                 target = attack_target
                 print(f"ATTACK MODE: Targeting {target} (trap quality: {trap_quality})")
             else:
-                # 攻撃戦略が実行できない場合は餌（通常→緩和の順）へ
-                food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=False)
-                if food_target is None:
-                    food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=True)
-                if food_target is not None:
+                # 攻撃戦略が実行できない場合は安全な餌を探す
+                food_target = determine_food(game_state)
+                if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
                     target = food_target
                     print(f"ATTACK MODE: Going for safe food at {target}")
                 else:
@@ -1436,11 +1313,9 @@ def move(game_state: typing.Dict) -> typing.Dict:
                             print(f"MOVE {game_state['turn']}: Random (no attack opportunity)")
                             return {"move": random.choice(safe_moves)}
         else:
-            # 追い詰められない場合は餌を優先（通常→緩和）
-            food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=False)
-            if food_target is None:
-                food_target = choose_food_target(game_state, my_head, my_body, target_head, target_body, relaxed=True)
-            if food_target is not None:
+            # 追い詰められない場合は安全な餌を優先
+            food_target = determine_food(game_state)
+            if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
                 target = food_target
                 print(f"FOOD MODE: Going for safe food at {target}")
             else:
