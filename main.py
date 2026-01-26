@@ -130,16 +130,22 @@ def evaluate_position_safety(pos, game_state, my_snake, enemy_snake):
             # 自分の方が中央に近い = 良い配置
             score += 50
         
-        # 敵に近すぎず遠すぎない距離を維持（3-5マス程度）
-        if 3 <= enemy_dist <= 5:
-            score += 30
-        elif enemy_dist < 3:
-            score += 10  # 近すぎるとリスク
+        # 敵に近すぎず遠すぎない距離を維持（2-6マス程度、より積極的に）
+        if 2 <= enemy_dist <= 6:
+            score += 40  # より積極的に近づく
+        elif enemy_dist < 2:
+            score += 20  # 近すぎても攻撃的
         elif enemy_dist > 7:
-            score -= 20  # 遠すぎると圧力がかからない
+            score -= 30  # 遠すぎると圧力がかからない
     else:
-        # 相手より短い：敵から遠い方が良い（防御的）
-        score += enemy_dist * 3
+        # 相手より短い：でも受け身にならず、適度な距離を保つ
+        # 完全に逃げるのではなく、2-4マス程度の距離を維持
+        if 2 <= enemy_dist <= 4:
+            score += 20  # 適度な距離で圧力をかける
+        elif enemy_dist < 2:
+            score -= 10  # 近すぎるのは危険
+        else:
+            score += enemy_dist * 2  # 遠すぎるのは避ける
     
     # 4. 壁への近さペナルティ
     wall_dist = min(pos['x'], pos['y'], 10 - pos['x'], 10 - pos['y'])
@@ -287,6 +293,260 @@ def calculate_blocking_position(my_head, exits):
     return closest_exit
 
 
+def predict_enemy_escape_routes(enemy_head, enemy_body, my_body, edge_type, parallel_line, game_state):
+    """
+    敵の脱出経路を予測し、塞ぐべき位置を返す
+    """
+    escape_routes = []
+    
+    # 敵の頭から見て、分断ラインを越える方向の隣接マスをチェック
+    if edge_type == 'left':
+        # 敵は左側（X < parallel_line）、自分は右側（X >= parallel_line）
+        # 敵が右に動こうとする経路をチェック
+        for dy in [-1, 0, 1]:
+            escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    # この位置から中央への到達可能性をチェック
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    elif edge_type == 'right':
+        # 敵は右側、自分は左側（X <= parallel_line）
+        for dy in [-1, 0, 1]:
+            escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    elif edge_type == 'bottom':
+        # 敵は下側、自分は上側（Y >= parallel_line）
+        for dx in [-1, 0, 1]:
+            escape_pos = {'x': enemy_head['x'] + dx, 'y': parallel_line}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    elif edge_type == 'top':
+        # 敵は上側、自分は下側（Y <= parallel_line）
+        for dx in [-1, 0, 1]:
+            escape_pos = {'x': enemy_head['x'] + dx, 'y': parallel_line}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    return escape_routes
+
+
+def is_being_trapped(my_head, my_body, enemy_head, enemy_body, game_state):
+    """
+    自分が追い詰められているかどうかを判定
+    返り値: (is_trapped: bool, trapped_severity: int)
+    """
+    # 自分の位置から到達可能な領域をチェック
+    my_reachable = floodfill(my_head, game_state, my_body, enemy_body)
+    my_length = len(my_body)
+    
+    # 到達可能領域が体長より少ない場合は危険
+    if my_reachable < my_length:
+        return True, 3  # 非常に危険
+    
+    # 到達可能領域が体長の1.5倍以下なら警告
+    if my_reachable < my_length * 1.5:
+        return True, 2  # 危険
+    
+    # 到達可能領域が体長の2倍以下なら注意
+    if my_reachable < my_length * 2:
+        return True, 1  # 注意
+    
+    # 敵が近く、自分の空間が限られている場合
+    enemy_dist = abs(my_head['x'] - enemy_head['x']) + abs(my_head['y'] - enemy_head['y'])
+    if enemy_dist <= 2 and my_reachable < my_length * 2.5:
+        return True, 1
+    
+    return False, 0
+
+
+def can_effectively_trap_enemy(my_head, my_body, enemy_head, enemy_body, enemy_snake, game_state):
+    """
+    敵を的確に追い詰められるかどうかを判定
+    返り値: (can_trap: bool, trap_quality: int)
+    """
+    my_length = len(my_body)
+    enemy_length = len(enemy_body)
+    
+    # 長さが足りない場合は追い詰められない
+    if my_length < enemy_length:
+        return False, 0
+    
+    # 敵の位置から到達可能な領域をチェック
+    enemy_reachable = floodfill(enemy_head, game_state, enemy_body, my_body)
+    
+    # 敵が既に追い詰められている（幅1経路にいる）
+    if enemy_reachable < enemy_length:
+        return True, 3  # 非常に良いチャンス
+    
+    # 敵が端に近い場合
+    enemy_wall_dist = min(enemy_head['x'], enemy_head['y'],
+                          10 - enemy_head['x'], 10 - enemy_head['y'])
+    
+    # 自分が中央寄りで、敵が端に寄っている場合
+    my_center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
+    
+    if enemy_wall_dist <= 3 and my_center_dist <= 4:
+        # 並走で追い込める可能性がある
+        herding_opportunity = detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, game_state)
+        if herding_opportunity:
+            my_safe_space = herding_opportunity.get('my_safe_space', 0)
+            enemy_trapped_space = herding_opportunity.get('enemy_trapped_space', 999)
+            
+            # 自分の空間が十分で、敵の空間が限られている場合
+            if my_safe_space >= my_length + 5 and enemy_trapped_space < enemy_length * 2:
+                return True, 2  # 良いチャンス
+    
+    # 敵が端に近づいている場合（5マス以内）
+    if enemy_wall_dist <= 5 and my_length >= enemy_length:
+        return True, 1  # チャンスあり
+    
+    return False, 0
+
+
+def is_safe_food(food_pos, my_head, my_body, enemy_head, enemy_body, game_state):
+    """
+    餌が安全に取れるかどうかを判定
+    端っこすぎる餌は避ける
+    """
+    # 餌の位置が端っこすぎるかチェック
+    food_wall_dist = min(food_pos['x'], food_pos['y'],
+                         10 - food_pos['x'], 10 - food_pos['y'])
+    
+    # 端から2マス以内の餌は危険（追い詰められる可能性）
+    if food_wall_dist <= 2:
+        return False
+    
+    # 餌の位置から到達可能な領域をチェック
+    food_reachable = floodfill(food_pos, game_state, my_body, enemy_body)
+    my_length = len(my_body)
+    
+    # 餌の位置に到達可能領域が体長より少ない場合は危険
+    if food_reachable < my_length:
+        return False
+    
+    # 敵が餌に近すぎる場合（2マス以内）
+    food_enemy_dist = abs(food_pos['x'] - enemy_head['x']) + abs(food_pos['y'] - enemy_head['y'])
+    if food_enemy_dist <= 2:
+        # 自分が敵より長い場合のみ安全
+        if len(my_body) <= len(enemy_body):
+            return False
+    
+    return True
+
+
+def predict_enemy_next_move(enemy_head, enemy_body, my_body, game_state):
+    """
+    敵の次の動きを予測（最も可能性の高い方向を返す）
+    """
+    # 敵が移動できる方向をチェック
+    possible_moves = []
+    directions = [
+        {'x': enemy_head['x'], 'y': enemy_head['y'] + 1, 'dir': 'up'},
+        {'x': enemy_head['x'], 'y': enemy_head['y'] - 1, 'dir': 'down'},
+        {'x': enemy_head['x'] - 1, 'y': enemy_head['y'], 'dir': 'left'},
+        {'x': enemy_head['x'] + 1, 'y': enemy_head['y'], 'dir': 'right'}
+    ]
+    
+    for move in directions:
+        pos = {'x': move['x'], 'y': move['y']}
+        # 範囲チェック
+        if not (0 <= pos['x'] < 11 and 0 <= pos['y'] < 11):
+            continue
+        # 自分の体と敵の体との衝突チェック
+        if pos in enemy_body[1:] or pos in my_body:
+            continue
+        
+        # その位置からの到達可能領域を評価
+        reachable = floodfill(pos, game_state, enemy_body, my_body)
+        possible_moves.append({
+            'pos': pos,
+            'dir': move['dir'],
+            'reachable': reachable
+        })
+    
+    if not possible_moves:
+        return None
+    
+    # 最も到達可能領域が大きい方向を選ぶ（敵は安全な方向に動く）
+    best_move = max(possible_moves, key=lambda m: m['reachable'])
+    return best_move['pos']
+    """
+    敵の脱出経路を予測し、塞ぐべき位置を返す
+    """
+    escape_routes = []
+    
+    # 敵の頭から見て、分断ラインを越える方向の隣接マスをチェック
+    if edge_type == 'left':
+        # 敵は左側、自分は右側（X >= parallel_line）
+        # 敵が右に動こうとする経路をチェック
+        for dy in [-1, 0, 1]:
+            escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    # この位置から中央への到達可能性をチェック
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    elif edge_type == 'right':
+        # 敵は右側、自分は左側（X <= parallel_line）
+        for dy in [-1, 0, 1]:
+            escape_pos = {'x': parallel_line, 'y': enemy_head['y'] + dy}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    elif edge_type == 'bottom':
+        # 敵は下側、自分は上側（Y >= parallel_line）
+        for dx in [-1, 0, 1]:
+            escape_pos = {'x': enemy_head['x'] + dx, 'y': parallel_line}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    elif edge_type == 'top':
+        # 敵は上側、自分は下側（Y <= parallel_line）
+        for dx in [-1, 0, 1]:
+            escape_pos = {'x': enemy_head['x'] + dx, 'y': parallel_line}
+            if 0 <= escape_pos['x'] < 11 and 0 <= escape_pos['y'] < 11:
+                if escape_pos not in enemy_body and escape_pos not in my_body:
+                    reachable = floodfill(escape_pos, game_state, enemy_body, my_body)
+                    if reachable > len(enemy_body):
+                        escape_routes.append(escape_pos)
+    
+    return escape_routes
+    """
+    出口を塞ぐための最適な位置を計算
+    """
+    if not exits:
+        return None
+    
+    # 最も近い出口を選ぶ
+    closest_exit = min(exits, key=lambda e: abs(my_head['x'] - e['x']) + abs(my_head['y'] - e['y']))
+    
+    # 出口の隣接マス（実際に塞ぐ位置）を返す
+    return closest_exit
+
+
 def detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, game_state):
     """
     敵が端に寄っているかを検出し、並走で追い込めるかを判定
@@ -296,8 +556,8 @@ def detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, ga
                           10 - enemy_head['x'], 10 - enemy_head['y'])
     
     # 敵が端に寄っているか、または端方向に移動中か判定
-    # より早い段階で並走を開始するため、条件を緩和（4マスまで）
-    if enemy_wall_dist > 4:
+    # より早い段階で並走を開始するため、条件を緩和（5マスまで、より積極的に）
+    if enemy_wall_dist > 5:
         return None  # まだ端に向かっていない
     
     # 敵がどの端に寄っているか判定
@@ -391,6 +651,9 @@ def detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, ga
 
 
 def calculate_parallel_chase_position(my_head, enemy_head, enemy_body, my_body, edge_type, parallel_line, game_state):
+    """
+    並走位置を計算。相手の退路を塞ぎつつ、自分は中央への退路を確保
+    """
     if edge_type == 'left':
         # Enemy at left edge: Position on X=parallel_line with same Y as enemy
         target_x = parallel_line
@@ -398,16 +661,21 @@ def calculate_parallel_chase_position(my_head, enemy_head, enemy_body, my_body, 
         
         # If already at dividing line, adjust to enemy's Y coordinate
         if my_head['x'] >= parallel_line:
-            # More aggressive: aim for enemy's exact Y coordinate
-            if abs(my_head['y'] - enemy_head['y']) > 0:
+            # より攻撃的：敵のY座標に完全に合わせる
+            target_y = enemy_head['y']
+            # 同じYにいる場合は、敵の動きを予測して先回り
+            if my_head['y'] == enemy_head['y']:
+                # 敵が上に動く可能性を考慮（端に追い込むため）
+                if enemy_head['y'] < 5:  # 敵が下側にいる
+                    target_y = enemy_head['y'] + 1  # 上に先回り
+                else:  # 敵が上側にいる
+                    target_y = enemy_head['y'] - 1  # 下に先回り
+            elif abs(my_head['y'] - enemy_head['y']) > 0:
                 # Move 1 step closer to enemy's Y
                 if my_head['y'] < enemy_head['y']:
                     target_y = my_head['y'] + 1
                 else:
                     target_y = my_head['y'] - 1
-            else:
-                # Already at same Y, maintain position
-                target_y = enemy_head['y']
         
         return {'x': target_x, 'y': target_y}
         
@@ -418,16 +686,18 @@ def calculate_parallel_chase_position(my_head, enemy_head, enemy_body, my_body, 
         
         # If already at dividing line, adjust to enemy's Y coordinate
         if my_head['x'] <= parallel_line:
-            # More aggressive: aim for enemy's exact Y coordinate
-            if abs(my_head['y'] - enemy_head['y']) > 0:
-                # Move 1 step closer to enemy's Y
+            # より攻撃的：敵のY座標に完全に合わせる
+            target_y = enemy_head['y']
+            if my_head['y'] == enemy_head['y']:
+                if enemy_head['y'] < 5:
+                    target_y = enemy_head['y'] + 1
+                else:
+                    target_y = enemy_head['y'] - 1
+            elif abs(my_head['y'] - enemy_head['y']) > 0:
                 if my_head['y'] < enemy_head['y']:
                     target_y = my_head['y'] + 1
                 else:
                     target_y = my_head['y'] - 1
-            else:
-                # Already at same Y, maintain position
-                target_y = enemy_head['y']
         
         return {'x': target_x, 'y': target_y}
         
@@ -438,16 +708,18 @@ def calculate_parallel_chase_position(my_head, enemy_head, enemy_body, my_body, 
         
         # If already at dividing line, adjust to enemy's X coordinate
         if my_head['y'] >= parallel_line:
-            # More aggressive: aim for enemy's exact X coordinate
-            if abs(my_head['x'] - enemy_head['x']) > 0:
-                # Move 1 step closer to enemy's X
+            # より攻撃的：敵のX座標に完全に合わせる
+            target_x = enemy_head['x']
+            if my_head['x'] == enemy_head['x']:
+                if enemy_head['x'] < 5:  # 敵が左側にいる
+                    target_x = enemy_head['x'] + 1  # 右に先回り
+                else:  # 敵が右側にいる
+                    target_x = enemy_head['x'] - 1  # 左に先回り
+            elif abs(my_head['x'] - enemy_head['x']) > 0:
                 if my_head['x'] < enemy_head['x']:
                     target_x = my_head['x'] + 1
                 else:
                     target_x = my_head['x'] - 1
-            else:
-                # Already at same X, maintain position
-                target_x = enemy_head['x']
         
         return {'x': target_x, 'y': target_y}
         
@@ -458,20 +730,20 @@ def calculate_parallel_chase_position(my_head, enemy_head, enemy_body, my_body, 
         
         # If already at dividing line, adjust to enemy's X coordinate
         if my_head['y'] <= parallel_line:
-            # More aggressive: aim for enemy's exact X coordinate
-            if abs(my_head['x'] - enemy_head['x']) > 0:
-                # Move 1 step closer to enemy's X
+            # より攻撃的：敵のX座標に完全に合わせる
+            target_x = enemy_head['x']
+            if my_head['x'] == enemy_head['x']:
+                if enemy_head['x'] < 5:
+                    target_x = enemy_head['x'] + 1
+                else:
+                    target_x = enemy_head['x'] - 1
+            elif abs(my_head['x'] - enemy_head['x']) > 0:
                 if my_head['x'] < enemy_head['x']:
                     target_x = my_head['x'] + 1
                 else:
                     target_x = my_head['x'] - 1
-            else:
-                # Already at same X, maintain position
-                target_x = enemy_head['x']
         
         return {'x': target_x, 'y': target_y}
-    
-    return None
     
     return None
 
@@ -482,8 +754,17 @@ def plan_attack_strategy(game_state, my_head, my_body, enemy_head, enemy_body, e
     優先順位：
     1. 敵が幅1経路にいる → 出口を塞ぐ
     2. 敵が端に寄っている → 並走して追い込む
-    3. その他 → 安全性を最優先に中央を維持
+    3. 敵を端に追い込む（的確に追い詰められる場合のみ）
+    4. その他 → 中央を制圧しつつ敵に圧力をかける（ただし不用意に近づかない）
     """
+    my_length = len(my_body)
+    enemy_length = len(enemy_body)
+    
+    # ★★★ 追加：本当に追い詰められる状況かどうかを判定 ★★★
+    can_trap, trap_quality = can_effectively_trap_enemy(my_head, my_body, enemy_head, enemy_body, enemy_snake, game_state)
+    if not can_trap:
+        # 追い詰められない場合は攻撃戦略を控える
+        return None
     
     # 戦略1: 敵が幅1経路にいるか確認
     corridor_info = find_enemy_narrow_corridor(enemy_head, enemy_body, my_body, game_state)
@@ -493,9 +774,35 @@ def plan_attack_strategy(game_state, my_head, my_body, enemy_head, enemy_body, e
         if blocking_pos:
             print(f"STRATEGY: Blocking corridor exit at {blocking_pos}")
             return blocking_pos
-        
     
-    # 戦略2: 敵を端に追い込めるか確認
+    # ★★★ 追加：敵の次の動きを予測して先回り ★★★
+    predicted_enemy_pos = predict_enemy_next_move(enemy_head, enemy_body, my_body, game_state)
+    if predicted_enemy_pos:
+        # 敵が端に近づいている場合、その方向を先回りして封じる
+        enemy_wall_dist = min(predicted_enemy_pos['x'], predicted_enemy_pos['y'],
+                              10 - predicted_enemy_pos['x'], 10 - predicted_enemy_pos['y'])
+        if enemy_wall_dist <= 3:
+            # 敵が端に近づいている → その方向を先回り
+            if predicted_enemy_pos['x'] <= 2:
+                # 左端方向
+                intercept_pos = {'x': 3, 'y': predicted_enemy_pos['y']}
+            elif predicted_enemy_pos['x'] >= 8:
+                # 右端方向
+                intercept_pos = {'x': 7, 'y': predicted_enemy_pos['y']}
+            elif predicted_enemy_pos['y'] <= 2:
+                # 下端方向
+                intercept_pos = {'x': predicted_enemy_pos['x'], 'y': 3}
+            elif predicted_enemy_pos['y'] >= 8:
+                # 上端方向
+                intercept_pos = {'x': predicted_enemy_pos['x'], 'y': 7}
+            else:
+                intercept_pos = None
+            
+            if intercept_pos:
+                intercept_space = floodfill(intercept_pos, game_state, my_body, enemy_body)
+                if intercept_space >= len(my_body):
+                    print(f"STRATEGY: Intercepting enemy at {intercept_pos}")
+                    return intercept_pos
     herding_opportunity = detect_wall_herding_opportunity(enemy_head, enemy_body, my_head, my_body, game_state)
     if herding_opportunity:
         edge_type = herding_opportunity['edge_type']
@@ -507,8 +814,8 @@ def plan_attack_strategy(game_state, my_head, my_body, enemy_head, enemy_body, e
         print(f"STRATEGY: Herding enemy at {edge_type} edge, positioned: {is_positioned}")
         print(f"Space check - My side: {my_safe_space}, Enemy side: {enemy_trapped_space}")
         
-        # 自分の空間が不十分なら追い込みを中止
-        if my_safe_space < len(my_body) + 10:
+        # 自分の空間が不十分なら追い込みを中止（ただし条件を緩和）
+        if my_safe_space < len(my_body) + 5:  # 10から5に緩和
             print(f"ABORT: My safe space too small, returning to normal strategy")
             return None
         
@@ -529,16 +836,34 @@ def plan_attack_strategy(game_state, my_head, my_body, enemy_head, enemy_body, e
         parallel_pos = calculate_parallel_chase_position(
             my_head, enemy_head, enemy_body, my_body, edge_type, parallel_line, game_state
         )
+        
+        # ★★★ 追加：敵の脱出経路を予測して塞ぐ ★★★
+        escape_routes = predict_enemy_escape_routes(enemy_head, enemy_body, my_body, edge_type, parallel_line, game_state)
+        if escape_routes:
+            # 最も近い脱出経路を塞ぐ
+            closest_escape = min(escape_routes, key=lambda e: abs(my_head['x'] - e['x']) + abs(my_head['y'] - e['y']))
+            # 脱出経路の手前に位置する（自分側から見て）
+            if edge_type == 'left':
+                blocking_pos = {'x': closest_escape['x'] + 1, 'y': closest_escape['y']}
+            elif edge_type == 'right':
+                blocking_pos = {'x': closest_escape['x'] - 1, 'y': closest_escape['y']}
+            elif edge_type == 'bottom':
+                blocking_pos = {'x': closest_escape['x'], 'y': closest_escape['y'] + 1}
+            elif edge_type == 'top':
+                blocking_pos = {'x': closest_escape['x'], 'y': closest_escape['y'] - 1}
+            
+            # ブロック位置が有効で、自分の空間が確保できるかチェック
+            block_space = floodfill(blocking_pos, game_state, my_body, enemy_body)
+            if block_space >= len(my_body) and 0 <= blocking_pos['x'] < 11 and 0 <= blocking_pos['y'] < 11:
+                print(f"STRATEGY Phase 2.5: Blocking escape route at {blocking_pos}")
+                return blocking_pos
+        
         if parallel_pos:
             print(f"STRATEGY Phase 2: Parallel chase to {parallel_pos}")
             return parallel_pos
-        
-    # ★★★ ここから追加 ★★★
-    # Strategy 3: If longer, push enemy toward edge by controlling center
-    my_length = len(my_body)
-    enemy_length = len(enemy_body)
     
-    if my_length > enemy_length + 1:  # 2マス以上長い場合
+    # 戦略3: 敵を端に追い込む（trap_qualityが高い場合のみ）
+    if trap_quality >= 2:
         # 敵がどの端に近いか判定
         enemy_distances = {
             'left': enemy_head['x'],
@@ -552,28 +877,45 @@ def plan_attack_strategy(game_state, my_head, my_body, enemy_head, enemy_body, e
         edge_name = nearest_edge[0]
         edge_dist = nearest_edge[1]
         
-        # 敵が既にある程度端に寄っている場合（5マス以内）
-        if edge_dist <= 5:
+        # 敵が端に寄っている場合（4マス以内、的確に追い詰められる場合のみ）
+        if edge_dist <= 4:
             # その端方向に敵を押し込むための位置を計算
             if edge_name == 'left':
-                # 左端：自分は敵の右側（X方向で大きい位置）で中央寄りに
-                push_target = {'x': min(enemy_head['x'] + 3, 7), 'y': enemy_head['y']}
+                # 左端：自分は敵の右側で中央寄りに
+                push_target = {'x': min(enemy_head['x'] + 2, 6), 'y': enemy_head['y']}
             elif edge_name == 'right':
                 # 右端：自分は敵の左側で中央寄りに
-                push_target = {'x': max(enemy_head['x'] - 3, 3), 'y': enemy_head['y']}
+                push_target = {'x': max(enemy_head['x'] - 2, 4), 'y': enemy_head['y']}
             elif edge_name == 'bottom':
                 # 下端：自分は敵の上側で中央寄りに
-                push_target = {'x': enemy_head['x'], 'y': min(enemy_head['y'] + 3, 7)}
+                push_target = {'x': enemy_head['x'], 'y': min(enemy_head['y'] + 2, 6)}
             elif edge_name == 'top':
                 # 上端：自分は敵の下側で中央寄りに
-                push_target = {'x': enemy_head['x'], 'y': max(enemy_head['y'] - 3, 3)}
+                push_target = {'x': enemy_head['x'], 'y': max(enemy_head['y'] - 2, 4)}
             
             # 安全性チェック
             push_space = floodfill(push_target, game_state, my_body, enemy_body)
             if push_space >= my_length:
                 print(f"STRATEGY: Pushing enemy to {edge_name} edge, target {push_target}")
                 return push_target
-    # ★★★ ここまで追加 ★★★
+    
+    # 戦略4: 中央を制圧しつつ、敵に適度な距離を保って圧力をかける（不用意に近づかない）
+    center = {'x': 5, 'y': 5}
+    my_center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
+    enemy_center_dist = abs(enemy_head['x'] - 5) + abs(enemy_head['y'] - 5)
+    enemy_dist = abs(my_head['x'] - enemy_head['x']) + abs(my_head['y'] - enemy_head['y'])
+    
+    # 自分が中央に近く、敵が中央から遠い場合、かつ敵との距離が適切な場合（3-5マス）
+    if my_center_dist < enemy_center_dist and my_center_dist <= 3 and 3 <= enemy_dist <= 5:
+        # 中央を維持（不用意に近づかない）
+        print(f"STRATEGY: Maintaining center position, enemy distance: {enemy_dist}")
+        return center
+    
+    # 敵が遠すぎる場合は中央を維持
+    if enemy_dist > 6 and my_center_dist > 2:
+        return center
+    
+    return None
     
 
 
@@ -651,7 +993,14 @@ def filtering_food(game_state: typing.Dict, food_list):
                             queue.append({'x': nx, 'y': ny})
                             space_count += 1
         if space_count > my_length:
-            safe_food_list.append(food)
+            # ★★★ 追加：端っこすぎる餌は避ける ★★★
+            food_wall_dist = min(food['x'], food['y'], 10 - food['x'], 10 - food['y'])
+            # 端から2マス以内の餌は危険（追い詰められる可能性）
+            if food_wall_dist > 2:
+                safe_food_list.append(food)
+            # 端から2マス以内でも、敵より十分長い場合は安全
+            elif my_length > op_length + 2:
+                safe_food_list.append(food)
 
     # 候補が一つもない場合はNone
     if not safe_food_list:
@@ -831,9 +1180,25 @@ def move(game_state: typing.Dict) -> typing.Dict:
         if is_narrow_path(pos, game_state, my_body, target_body, target_head):
             safety_score -= 500
     
-        # 相手より長い時、敵の隣はボーナス（攻撃的）
+        # 相手より長い時、敵の隣はボーナス（ただし的確に追い詰められる場合のみ）
         if move in enemy_adjacent_moves and my_length > len(target_body):
-            safety_score += 30
+            # 現在の位置から本当に追い詰められる状況かチェック
+            can_trap, trap_quality = can_effectively_trap_enemy(
+                my_head, my_body, target_head, target_body, enemy_snake, game_state
+            )
+            if can_trap and trap_quality >= 2:
+                safety_score += 50  # 的確に追い詰められる場合のみ積極的に
+            else:
+                safety_score -= 20  # 不用意に近づくのは避ける
+        # 長さが同じでも、敵の隣に積極的に行く（ただし的確に追い詰められる場合のみ）
+        elif move in enemy_adjacent_moves and my_length >= len(target_body):
+            can_trap, trap_quality = can_effectively_trap_enemy(
+                my_head, my_body, target_head, target_body, enemy_snake, game_state
+            )
+            if can_trap and trap_quality >= 2:
+                safety_score += 30
+            else:
+                safety_score -= 20  # 不用意に近づくのは避ける
     
         move_scores[move] = safety_score
 
@@ -888,50 +1253,86 @@ def move(game_state: typing.Dict) -> typing.Dict:
 
 
     #目的ますを決める
-    if len(target_body) + 2 < len(my_body):
-        # 敵より長い時：戦略的攻撃
-        attack_target = plan_attack_strategy(game_state, my_head, my_body, target_head, target_body, enemy_snake)
-        if attack_target is not None:
-            target = attack_target
+    # ★★★ 改善：状況に応じて適切に判断 ★★★
+    
+    # まず自分が追い詰められているかチェック
+    is_trapped, trapped_severity = is_being_trapped(my_head, my_body, target_head, target_body, game_state)
+    
+    if is_trapped:
+        # 自分が追い詰められている場合は安全性を最優先
+        print(f"DEFENSIVE MODE: Being trapped (severity: {trapped_severity})")
+        
+        # 安全な餌を探す
+        food_target = determine_food(game_state)
+        if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
+            target = food_target
+            print(f"DEFENSIVE: Going for safe food at {target}")
         else:
-            # 攻撃チャンスがない場合は安全な餌取り
-            target = determine_food(game_state)
-            if target is None:
-                # 餌がない場合は中央へ、または最も安全な方向へ
+            # 安全な餌がない場合は最も安全な方向へ
+            if move_scores:
+                best_move = max(move_scores, key=move_scores.get)
+                print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
+                print(f"MOVE {game_state['turn']}: Best safe move (trapped) {best_move}")
+                return {"move": best_move}
+            else:
+                print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
+                print(f"MOVE {game_state['turn']}: Random (trapped, no alternatives)")
+                return {"move": random.choice(safe_moves)}
+    else:
+        # 自分が追い詰められていない場合
+        # 敵を的確に追い詰められるかチェック
+        can_trap, trap_quality = can_effectively_trap_enemy(my_head, my_body, target_head, target_body, enemy_snake, game_state)
+        
+        if can_trap and trap_quality >= 2:
+            # 的確に追い詰められる場合は攻撃戦略を優先
+            attack_target = plan_attack_strategy(game_state, my_head, my_body, target_head, target_body, enemy_snake)
+            if attack_target is not None:
+                target = attack_target
+                print(f"ATTACK MODE: Targeting {target} (trap quality: {trap_quality})")
+            else:
+                # 攻撃戦略が実行できない場合は安全な餌を探す
+                food_target = determine_food(game_state)
+                if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
+                    target = food_target
+                    print(f"ATTACK MODE: Going for safe food at {target}")
+                else:
+                    # 中央を維持
+                    center = {"x": 5, "y": 5}
+                    center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
+                    if center_dist > 2:
+                        target = center
+                    else:
+                        if move_scores:
+                            best_move = max(move_scores, key=move_scores.get)
+                            print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
+                            print(f"MOVE {game_state['turn']}: Best safe move (no attack opportunity) {best_move}")
+                            return {"move": best_move}
+                        else:
+                            print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
+                            print(f"MOVE {game_state['turn']}: Random (no attack opportunity)")
+                            return {"move": random.choice(safe_moves)}
+        else:
+            # 追い詰められない場合は安全な餌を優先
+            food_target = determine_food(game_state)
+            if food_target is not None and is_safe_food(food_target, my_head, my_body, target_head, target_body, game_state):
+                target = food_target
+                print(f"FOOD MODE: Going for safe food at {target}")
+            else:
+                # 安全な餌がない場合は中央を維持
                 center = {"x": 5, "y": 5}
                 center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
                 if center_dist > 2:
-                    target = center  # 中央から遠い場合は中央へ
+                    target = center
                 else:
-                    # 中央付近なら最も安全な方向を選んで即座に移動
                     if move_scores:
                         best_move = max(move_scores, key=move_scores.get)
                         print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
-                        print(f"MOVE {game_state['turn']}: Best safe move (no food, at center) {best_move}")
+                        print(f"MOVE {game_state['turn']}: Best safe move (no safe food) {best_move}")
                         return {"move": best_move}
                     else:
                         print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
-                        print(f"MOVE {game_state['turn']}: Random (no food, no scores)")
+                        print(f"MOVE {game_state['turn']}: Random (no safe food)")
                         return {"move": random.choice(safe_moves)}
-    else:
-        # エサ取り優先
-        target = determine_food(game_state)
-        if target is None: # 餌が見つからない場合
-            center = {"x": 5, "y": 5}
-            center_dist = abs(my_head['x'] - 5) + abs(my_head['y'] - 5)
-            if center_dist > 2:
-                target = center
-            else:
-                # 中央付近なら安全な方向へ
-                if move_scores:
-                    best_move = max(move_scores, key=move_scores.get)
-                    print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
-                    print(f"MOVE {game_state['turn']}: Best safe move (no food) {best_move}")
-                    return {"move": best_move}
-                else:
-                    print(is_move_safe["up"],is_move_safe["down"],is_move_safe["left"],is_move_safe["right"])
-                    print(f"MOVE {game_state['turn']}: Random (no alternatives)")
-                    return {"move": random.choice(safe_moves)}
 
 
 
